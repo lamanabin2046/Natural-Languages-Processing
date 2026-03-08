@@ -1,0 +1,7 @@
+# Block ONLY the large gensim model
+Assignment1/model/model_gensim.pkl
+
+# Python cache
+__pycache__/
+.ipynb_checkpoints/
+.env

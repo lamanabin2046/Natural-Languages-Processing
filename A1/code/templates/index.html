@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NLP Assignment – Search Engine</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f3d2e, #062726);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col items-center text-gray-200">
+
+    <!-- HERO -->
+    <section class="text-center mt-20 mb-12">
+        <h1 class="text-5xl font-extrabold tracking-tight text-white">
+            NLP Assignment – Search Engine
+        </h1>
+        <p class="mt-4 text-gray-300 text-lg max-w-2xl mx-auto">
+            Search similar contexts using dot product similarity
+        </p>
+    </section>
+
+    <!-- MAIN CARD -->
+    <div class="w-full max-w-3xl bg-white/5 backdrop-blur-xl
+                rounded-2xl border border-white/10 shadow-2xl p-8">
+
+        <h2 class="text-2xl font-semibold text-center mb-6 text-white">
+            Search Similar Context
+        </h2>
+
+        <!-- SEARCH FORM -->
+        <form method="POST" class="flex gap-3 mb-8">
+            <input
+                type="text"
+                name="query"
+                placeholder="Enter a corpus word (e.g., fruit, computer)"
+                value="{{ query }}"
+                required
+                class="flex-1 px-5 py-3 rounded-xl
+                       bg-black/40 text-white placeholder-gray-400
+                       border border-white/20
+                       focus:border-green-400
+                       focus:ring-2 focus:ring-green-400/40
+                       transition-all duration-300
+                       hover:border-green-300"
+            >
+
+            <button
+                type="submit"
+                class="px-8 py-3 rounded-xl font-semibold text-white
+                       bg-gradient-to-r from-green-500 to-emerald-600
+                       hover:from-green-400 hover:to-emerald-500
+                       hover:shadow-lg hover:shadow-green-500/30
+                       transition-all duration-300"
+            >
+                Search
+            </button>
+        </form>
+
+        <!-- RESULTS TABLE -->
+        {% if results %}
+        <div class="bg-black/40 rounded-xl border border-white/10 overflow-hidden">
+
+            <div class="px-6 py-4 border-b border-white/10 text-center">
+                <h3 class="text-lg font-semibold text-gray-200">
+                    Top 10 Most Similar Contexts
+                </h3>
+            </div>
+
+            <table class="w-full text-left text-sm">
+                <thead class="bg-white/5 text-gray-300 uppercase tracking-wider">
+                    <tr>
+                        <th class="px-6 py-3">Rank</th>
+                        <th class="px-6 py-3">Context Word</th>
+                        <th class="px-6 py-3 text-right">Dot Product Score</th>
+                    </tr>
+                </thead>
+
+                <tbody class="divide-y divide-white/10">
+                    {% for score, word in results %}
+                    <tr class="hover:bg-white/10 transition">
+                        <td class="px-6 py-3 font-mono text-gray-300">
+                            {{ loop.index }}
+                        </td>
+                        <td class="px-6 py-3 font-medium text-white">
+                            {{ word }}
+                        </td>
+                        <td class="px-6 py-3 text-right font-mono text-green-400">
+                            {{ score }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- FOOTER -->
+    <footer class="mt-16 mb-6 text-gray-400 text-sm">
+        NLP • Word Embeddings • Flask • Dot Product Similarity
+    </footer>
+
+</body>
+</html>

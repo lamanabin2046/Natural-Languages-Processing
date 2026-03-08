@@ -1,0 +1,28 @@
+# ===== Models / embeddings =====
+*.pt
+*.pth
+*.pkl
+
+# ===== Data =====
+A2/data/
+*.csv
+*.tab
+
+# ===== Media =====
+*.gif
+*.pdf
+
+# ===== Python =====
+__pycache__/
+*.pyc
+
+# ===== Logs / env =====
+*.log
+.env
+.venv
+myConda/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+*.mp4

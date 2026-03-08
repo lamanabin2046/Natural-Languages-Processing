@@ -1,0 +1,5 @@
+torch>=2.0
+dash>=2.14
+numpy>=1.23
+matplotlib>=3.7
+requests>=2.28
