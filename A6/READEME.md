@@ -13,7 +13,7 @@ This project implements a **Contextual Retrieval-Augmented Generation (RAG)** sy
 * **Source Transparency:** An expander to view the exact text chunks retrieved from the database.
 
 ## 📂 Project Structure
-```text
+
 A6/
 ├── code/
 │   ├── app.py           # Main Streamlit application
