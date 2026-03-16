@@ -62,5 +62,9 @@ Pointwise Mutual Information (PMI).
 Student: st125985
 
 Class: NLP 2026
-![Alt text](path/to/Demo.gif)
+
+
+# Devanagari OCR with Word Embedding Analysis
+
+![Demo of OCR model](demo.gif)
 
