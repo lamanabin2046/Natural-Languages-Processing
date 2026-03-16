@@ -1,339 +1,315 @@
-# ==============================
-# Dash + Bootstrap LSTM LM App
-# ==============================
-
-import pickle
-import re
+import os, sys
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import torchtext
 
-import dash
-from dash import html, dcc, Input, Output, State
-import dash_bootstrap_components as dbc
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(_file_))))
 
-# ------------------------------------------------
-# 1. Device
-# ------------------------------------------------
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print("Using device:", device)
+from dash import Dash, dcc, html, Input, Output, State
+from torchtext.data.utils import get_tokenizer
+from nepalitokenizers import WordPiece
 
-# ------------------------------------------------
-# 2. Load vocab
-# ------------------------------------------------
-with open("../model/vocab.pkl", "rb") as f:
-    vocab = pickle.load(f)
+from src.model_def import build_model
+from src.data_utils import make_text_transform
+from src.infer import greedy_decode
 
-stoi = vocab["stoi"]
-itos = vocab["itos"]
 
-PAD = stoi.get("<pad>", 0)
-UNK = stoi.get("<unk>", 1)
-vocab_size = len(itos)
+# -------------------- Model + Tokenizers --------------------
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ------------------------------------------------
-# 3. Model
-# ------------------------------------------------
-class LSTMLanguageModel(nn.Module):
-    def __init__(self, vocab_size, emb_dim, hidden_dim, num_layers, dropout, pad_idx):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, emb_dim, padding_idx=pad_idx)
-        self.lstm = nn.LSTM(
-            emb_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.fc = nn.Linear(hidden_dim, vocab_size)
+SRC_LANG = "en"
+TARG_LANG = "ne"
 
-    def forward(self, x, state=None):
-        emb = self.embedding(x)
-        out, state = self.lstm(emb, state)
-        logits = self.fc(out)
-        return logits, state
+UNK_IDX, PAD_IDX, SOS_IDX, EOS_IDX = 0, 1, 2, 3
 
-# ------------------------------------------------
-# 4. Load checkpoint
-# ------------------------------------------------
-checkpoint = torch.load("../model/lstm_language_model.pt", map_location=device)
+vocab_transform = torch.load("model/vocab.pt", map_location="cpu")
 
-model = LSTMLanguageModel(
-    vocab_size=vocab_size,
-    emb_dim=256,
-    hidden_dim=1024,
-    num_layers=3,
-    dropout=0.3,
-    pad_idx=PAD,
-).to(device)
+token_transform = {}
+token_transform[SRC_LANG] = get_tokenizer("spacy", language="en_core_web_sm")
+token_transform[TARG_LANG] = WordPiece()
 
-model.load_state_dict(checkpoint["state_dict"])
-model.eval()
-
-print("✅ Model loaded")
-
-# ------------------------------------------------
-# 5. Tokenizer
-# ------------------------------------------------
-def word_tokenize(text):
-    text = text.lower()
-    return re.findall(r"[a-z]+(?:'[a-z]+)?|[0-9]+|[^\w\s]", text)
-
-def encode_tokens(tokens):
-    return [stoi.get(t, UNK) for t in tokens]
-
-def decode_tokens(ids):
-    return [itos[i] for i in ids]
-
-PUNCT_NO_SPACE_BEFORE = {".", ",", "!", "?", ";", ":", "%", ")", "]", "}"}
-PUNCT_NO_SPACE_AFTER = {"(", "[", "{"}
-
-def detokenize(tokens):
-    out = []
-    for t in tokens:
-        if not out:
-            out.append(t)
-        elif t in PUNCT_NO_SPACE_BEFORE:
-            out[-1] += t
-        elif out[-1] in PUNCT_NO_SPACE_AFTER:
-            out[-1] += t
-        else:
-            out.append(" " + t)
-    return "".join(out)
-
-# ------------------------------------------------
-# 6. Text post-processing
-# ------------------------------------------------
-def capitalize_sentences(text: str) -> str:
-    """
-    Capitalize the first letter of each sentence.
-    """
-    text = text.strip()
-    if not text:
-        return text
-
-    # Capitalize very first character
-    text = text[0].upper() + text[1:]
-
-    # Capitalize after . ? !
-    return re.sub(
-        r'([.!?]\s+)([a-z])',
-        lambda m: m.group(1) + m.group(2).upper(),
-        text
-    )
-
-# ------------------------------------------------
-# 7. Generation
-# ------------------------------------------------
-def sample_top_k(logits, k):
-    values, indices = torch.topk(logits, k)
-    probs = F.softmax(values, dim=-1)
-    choice = torch.multinomial(probs, 1)
-    return indices.gather(-1, choice)
-
-@torch.no_grad()
-def generate_text(seed_text, max_new_tokens, temperature, top_k):
-    seed_ids = encode_tokens(word_tokenize(seed_text)) or [UNK]
-    x = torch.tensor([seed_ids], dtype=torch.long).to(device)
-    _, state = model(x)
-
-    last_id = x[:, -1:]
-    generated = seed_ids[:]
-
-    for _ in range(max_new_tokens):
-        logits, state = model(last_id, state)
-        logits = logits[:, -1, :] / max(temperature, 1e-6)
-
-        if 1 <= top_k < logits.size(-1):
-            next_id = sample_top_k(logits, top_k)
-        else:
-            probs = F.softmax(logits, dim=-1)
-            next_id = torch.multinomial(probs, 1)
-
-        generated.append(next_id.item())
-        last_id = next_id
-
-    text = detokenize(decode_tokens(generated))
-    return capitalize_sentences(text)
-
-# ------------------------------------------------
-# 8. Dash App (Styled Pro UI)
-# ------------------------------------------------
-app = dash.Dash(
-    __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+text_transform = make_text_transform(
+    token_transform=token_transform,
+    vocab_transform=vocab_transform,
+    SRC_LANG=SRC_LANG,
+    TARG_LANG=TARG_LANG,
+    SOS_IDX=SOS_IDX,
+    EOS_IDX=EOS_IDX,
 )
 
-app.layout = dbc.Container(
-    fluid=True,
+config = {
+    "HID_DIM": 256,
+    "ENC_LAYERS": 3,
+    "DEC_LAYERS": 3,
+    "ENC_HEADS": 8,
+    "DEC_HEADS": 8,
+    "ENC_PF_DIM": 512,
+    "DEC_PF_DIM": 512,
+    "ENC_DROPOUT": 0.1,
+    "DEC_DROPOUT": 0.1,
+    "ATTEN_TYPE": "additive",
+    "MAX_LEN": 5000,  # must match checkpoint pos_embedding sizes
+    "SRC_PAD_IDX": PAD_IDX,
+    "TRG_PAD_IDX": PAD_IDX,
+}
+
+INPUT_DIM = len(vocab_transform[SRC_LANG])
+OUTPUT_DIM = len(vocab_transform[TARG_LANG])
+
+model = build_model(config, INPUT_DIM, OUTPUT_DIM, DEVICE)
+state_dict = torch.load("model/additive_state_dict.pt", map_location=DEVICE)
+model.load_state_dict(state_dict)
+model.to(DEVICE)
+model.eval()
+
+ne_itos = vocab_transform[TARG_LANG].get_itos()
+
+
+def decode_ids_to_tokens(pred_ids, eos_idx=EOS_IDX, max_out_tokens=25):
+    """
+    Robust decoding:
+    - stop at EOS id
+    - cap output tokens for UI
+    - stop if model loops repeating tokens
+    """
+    tokens = []
+    ids = pred_ids.tolist()
+
+    for t in ids:
+        if t == eos_idx:
+            break
+        if t in (SOS_IDX, PAD_IDX):
+            continue
+
+        tok = ne_itos[t]
+        tokens.append(tok)
+
+        if len(tokens) >= max_out_tokens:
+            break
+
+        # repetition guard
+        if len(tokens) >= 12 and len(set(tokens[-8:])) <= 2:
+            break
+
+    return tokens
+
+
+# -------------------- Dash UI (New Layout) --------------------
+app = Dash(_name_)
+app.title = "EN → NE Translator"
+
+CARD_STYLE = {
+    "background": "white",
+    "borderRadius": "16px",
+    "padding": "18px",
+    "boxShadow": "0 10px 30px rgba(0,0,0,0.08)",
+    "border": "1px solid rgba(0,0,0,0.06)",
+}
+
+app.layout = html.Div(
     style={
         "minHeight": "100vh",
-        "backgroundColor": "#050511",
-        "paddingTop": "60px",
+        "display": "flex",
+        "alignItems": "center",
+        "justifyContent": "center",
+        "background": "linear-gradient(135deg, #f6f8ff, #f8fbff)",
+        "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial",
+        "padding": "24px",
     },
     children=[
-        dbc.Row(
-            justify="center",
+        html.Div(
+            style={**CARD_STYLE, "width": "min(920px, 96vw)"},
             children=[
-                dbc.Col(
-                    width=7,
+                html.Div(
+                    style={
+                        "display": "flex",
+                        "justifyContent": "space-between",
+                        "alignItems": "center",
+                        "gap": "12px",
+                        "marginBottom": "12px",
+                    },
                     children=[
-
-                        html.H2(
-                            "LSTM Language Model",
-                            className="text-center mb-4",
-                            style={"color": "#eaeaea"},
+                        html.Div(
+                            children=[
+                                html.H2(
+                                    "English → Nepali Translator",
+                                    style={"margin": "0", "fontSize": "26px"},
+                                ),
+                                html.Div(
+                                    "Additive Attention Transformer (demo UI)",
+                                    style={"opacity": "0.65", "marginTop": "4px"},
+                                ),
+                            ]
                         ),
+                        html.Div(
+                            style={
+                                "padding": "8px 12px",
+                                "borderRadius": "999px",
+                                "background": "#f2f5ff",
+                                "border": "1px solid rgba(0,0,0,0.06)",
+                                "fontSize": "13px",
+                            },
+                            children="Tip: keep input short (1–2 sentences)",
+                        ),
+                    ],
+                ),
 
-                        # Prompt card
-                        dbc.Card(
-                            dbc.CardBody([
-                                dbc.Label(
-                                    "Prompt",
-                                    style={
-                                        "fontSize": "25px",
-                                        "color": "#f5f5f5",
-                                        "marginBottom": "20px",
-                                    },
+                # Middle Input Box
+                html.Div(
+                    style={"display": "flex", "justifyContent": "center"},
+                    children=[
+                        html.Div(
+                            style={"width": "min(720px, 92vw)"},
+                            children=[
+                                html.Label(
+                                    "Enter English text",
+                                    style={"display": "block", "marginBottom": "8px", "fontWeight": "600"},
                                 ),
                                 dcc.Textarea(
-                                    id="seed-text",
-                                    value="alice was",
+                                    id="src_text",
+                                    value="English to Nepali Translation Model",
+                                    placeholder="Type your English sentence here...",
                                     style={
                                         "width": "100%",
-                                        "height": "90px",
-                                        "backgroundColor": "#1b1f2a",
-                                        "color": "#f5f5f5",
-                                        "border": "1px solid #3a3f4b",
-                                        "padding": "10px",
-                                        "fontFamily": "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-                                        "fontSize": "20px",
-                                        "borderRadius": "10px",
-                                    },
-                                ),
-                            ]),
-                            className="mb-3",
-                            style={"backgroundColor": "#141824"},
-                        ),
-
-                        # Controls card
-                        dbc.Card(
-                            dbc.CardBody([
-                                dbc.Row([
-                                    dbc.Col([
-                                        dbc.Label("Temperature", style={"fontSize": "25px"}),
-                                        dbc.Input(
-                                            id="temperature",
-                                            type="number",
-                                            value=0.7,
-                                            step=0.1,
-                                            style={
-                                                "backgroundColor": "#1b1f2a",
-                                                "color": "#f5f5f5",
-                                                "border": "1px solid #3a3f4b",
-                                            },
-                                        ),
-                                    ]),
-                                    dbc.Col([
-                                        dbc.Label("Top-k", style={"fontSize": "25px"}),
-                                        dbc.Input(
-                                            id="top-k",
-                                            type="number",
-                                            value=20,
-                                            step=1,
-                                            style={
-                                                "backgroundColor": "#1b1f2a",
-                                                "color": "#f5f5f5",
-                                                "border": "1px solid #3a3f4b",
-                                            },
-                                        ),
-                                    ]),
-                                    dbc.Col([
-                                        dbc.Label("Max tokens", style={"fontSize": "25px"}),
-                                        dbc.Input(
-                                            id="max-tokens",
-                                            type="number",
-                                            value=100,
-                                            step=10,
-                                            style={
-                                                "backgroundColor": "#1b1f2a",
-                                                "color": "#f5f5f5",
-                                                "border": "1px solid #3a3f4b",
-                                            },
-                                        ),
-                                    ]),
-                                    dbc.Col(
-                                        dbc.Button(
-                                            "Generate",
-                                            id="generate-btn",
-                                            color="primary",
-                                            className="mt-4 w-100",
-                                        ),
-                                    ),
-                                ]),
-                            ]),
-                            className="mb-3",
-                            style={"backgroundColor": "#141824"},
-                        ),
-
-                        # Output card
-                        dbc.Card(
-                            dbc.CardBody([
-                                dbc.Label(
-                                    "Generated Text",
-                                    style={
-                                        "fontSize": "25px",
-                                        "color": "#f5f5f5",
-                                        "marginBottom": "20px",
+                                        "height": "120px",
+                                        "borderRadius": "12px",
+                                        "padding": "12px",
+                                        "border": "1px solid rgba(0,0,0,0.18)",
+                                        "outline": "none",
+                                        "fontSize": "15px",
+                                        "resize": "none",
                                     },
                                 ),
                                 html.Div(
-                                    id="output-text",
-                                    className="generated-text",
                                     style={
-                                        "whiteSpace": "pre-wrap",
-                                        "fontFamily": "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-                                        "fontSize": "20px",
-                                        "lineHeight": "1.8",
-                                        "color": "#D5DDDF",
-                                        "minHeight": "300px",
-                                        "textAlign": "justify",
+                                        "display": "flex",
+                                        "gap": "10px",
+                                        "alignItems": "center",
+                                        "marginTop": "12px",
                                     },
+                                    children=[
+                                        html.Button(
+                                            "Translate",
+                                            id="btn_translate",
+                                            n_clicks=0,
+                                            style={
+                                                "border": "none",
+                                                "borderRadius": "12px",
+                                                "padding": "10px 16px",
+                                                "cursor": "pointer",
+                                                "fontWeight": "700",
+                                                "background": "#2b59ff",
+                                                "color": "white",
+                                            },
+                                        ),
+                                        html.Button(
+                                            "Clear",
+                                            id="btn_clear",
+                                            n_clicks=0,
+                                            style={
+                                                "borderRadius": "12px",
+                                                "padding": "10px 16px",
+                                                "cursor": "pointer",
+                                                "fontWeight": "700",
+                                                "background": "white",
+                                                "border": "1px solid rgba(0,0,0,0.18)",
+                                            },
+                                        ),
+                                        html.Div(
+                                            id="status",
+                                            style={"opacity": "0.7", "fontSize": "13px"},
+                                        ),
+                                    ],
                                 ),
-                            ]),
-                            style={"backgroundColor": "#10131a"},
+                            ],
+                        )
+                    ],
+                ),
+
+                # Output Card
+                html.Div(
+                    style={**CARD_STYLE, "marginTop": "18px"},
+                    children=[
+                        html.Div(
+                            style={"display": "flex", "justifyContent": "space-between", "alignItems": "baseline"},
+                            children=[
+                                html.H3("Nepali Output", style={"margin": "0"}),
+                                html.Div(
+                                    "Output is capped to avoid looping",
+                                    style={"opacity": "0.55", "fontSize": "12px"},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            id="out_text",
+                            style={
+                                "marginTop": "10px",
+                                "whiteSpace": "pre-wrap",
+                                "fontSize": "18px",
+                                "lineHeight": "1.55",
+                                "padding": "12px",
+                                "borderRadius": "12px",
+                                "background": "#fafafa",
+                                "border": "1px solid rgba(0,0,0,0.06)",
+                                "minHeight": "64px",
+                            },
                         ),
                     ],
-                )
+                ),
+
+                html.Div(
+                    style={"marginTop": "14px", "opacity": "0.6", "fontSize": "12px"},
+                    children=" ",
+                ),
             ],
         )
     ],
 )
 
-# ------------------------------------------------
-# 9. Callback
-# ------------------------------------------------
-@app.callback(
-    Output("output-text", "children"),
-    Input("generate-btn", "n_clicks"),
-    State("seed-text", "value"),
-    State("temperature", "value"),
-    State("top-k", "value"),
-    State("max-tokens", "value"),
-)
-def run_generation(n, seed, temperature, top_k, max_tokens):
-    if not n:
-        return ""
 
-    return generate_text(
-        seed_text=seed,
-        max_new_tokens=int(max_tokens),
-        temperature=float(temperature),
-        top_k=int(top_k),
+# -------------------- Callbacks --------------------
+@app.callback(
+    Output("src_text", "value"),
+    Input("btn_clear", "n_clicks"),
+    prevent_initial_call=True,
+)
+def clear_text(_):
+    return ""
+
+
+@app.callback(
+    Output("out_text", "children"),
+    Output("status", "children"),
+    Input("btn_translate", "n_clicks"),
+    State("src_text", "value"),
+)
+def translate(n_clicks, src_text):
+    if not n_clicks:
+        return "", ""
+
+    if not src_text or not src_text.strip():
+        return "⚠️ Please enter some English text first.", "Waiting for input"
+
+    # Transform input
+    src_ids = text_transform[SRC_LANG](src_text.lower())
+    src_tensor = src_ids.unsqueeze(0).to(DEVICE)
+
+    # Decode (keep steps reasonable)
+    pred_ids, _ = greedy_decode(
+        model,
+        src_tensor,
+        SOS_IDX,
+        EOS_IDX,
+        max_len=80,
     )
 
-# ------------------------------------------------
-# 10. Run
-# ------------------------------------------------
-if __name__ == "__main__":
+    tokens = decode_ids_to_tokens(pred_ids, eos_idx=EOS_IDX, max_out_tokens=25)
+    out = " ".join(tokens).strip()
+
+    if not out:
+        out = "(No output generated — try a shorter/simple sentence.)"
+
+    return out, f"Translated {len(tokens)} tokens"
+
+
+if _name_ == "_main_":
     app.run(debug=True)
