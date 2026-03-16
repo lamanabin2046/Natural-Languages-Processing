@@ -66,5 +66,6 @@ Class: NLP 2026
 
 # Devanagari OCR with Word Embedding Analysis
 
+Demo:
+## DEMO
 ![Demo of OCR model](demo.gif)
-
